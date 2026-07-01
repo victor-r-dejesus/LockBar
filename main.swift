@@ -6,11 +6,14 @@ import CoreGraphics
 final class DockLocker {
     private var eventTap: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
+    // The screen the dock was on when lock() was called.
+    private(set) var dockedScreen: NSScreen?
 
     var isLocked: Bool { eventTap != nil }
 
     func lock() -> Bool {
         guard checkAccessibility() else { return false }
+        dockedScreen = screenWithDock()
 
         let mask: CGEventMask =
             (1 << CGEventType.mouseMoved.rawValue) |
@@ -42,6 +45,14 @@ final class DockLocker {
             CFRunLoopRemoveSource(CFRunLoopGetMain(), source, .commonModes)
             runLoopSource = nil
         }
+        dockedScreen = nil
+    }
+
+    // The screen whose visibleFrame bottom edge is higher than its frame bottom
+    // is the one the dock is sitting on.
+    func screenWithDock() -> NSScreen? {
+        NSScreen.screens.first { $0.visibleFrame.origin.y > $0.frame.origin.y }
+            ?? NSScreen.screens.first
     }
 
     // Returns the primary screen height in points (used for CG <-> NS coordinate conversion).
@@ -49,13 +60,13 @@ final class DockLocker {
         NSScreen.screens.first?.frame.height ?? 0
     }
 
-    // Checks if the CG-coordinate point is within `threshold` pixels of the bottom
-    // of any non-primary screen, and if so returns the clamped y to use instead.
+    // If the cursor is within `threshold` pixels of the bottom of any screen
+    // that is NOT the docked screen, return a clamped y to block the hover.
     func clampedY(for location: CGPoint, threshold: CGFloat = 3) -> CGFloat? {
         let ph = primaryHeight()
-        for screen in NSScreen.screens.dropFirst() {
+        for screen in NSScreen.screens {
+            guard screen != dockedScreen else { continue }
             let f = screen.frame
-            // Convert NSScreen bottom edge to CG y (CG y grows downward from top of primary).
             let cgBottom = ph - f.origin.y
             let cgTop    = ph - (f.origin.y + f.height)
             let cgLeft   = f.origin.x
@@ -66,7 +77,6 @@ final class DockLocker {
                   location.y >= cgTop,
                   location.y <= cgBottom else { continue }
 
-            // Within `threshold` px of the bottom edge — clamp upward.
             if location.y >= cgBottom - threshold {
                 return cgBottom - threshold - 1
             }
